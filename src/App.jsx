@@ -3,18 +3,37 @@ import { Settings, Download, X, Dumbbell, Sprout } from "lucide-react";
 import FitnessModule from "./Fitness.jsx";
 import HabitsModule from "./Habits.jsx";
 
-function loadApiKey() {
-  return localStorage.getItem("anthropic_api_key") || "";
-}
+function loadApiKey() { return localStorage.getItem("anthropic_api_key") || ""; }
 function saveApiKey(key) {
   if (key) localStorage.setItem("anthropic_api_key", key);
   else localStorage.removeItem("anthropic_api_key");
 }
-function loadActiveModule() {
-  return localStorage.getItem("active_module") || "fitness";
+function loadActiveModule() { return localStorage.getItem("active_module") || "fitness"; }
+function saveActiveModule(m) { localStorage.setItem("active_module", m); }
+
+// Sunday reflection helpers
+function getThisWeekKey() {
+  const now = new Date();
+  // ISO week (Mon-Sun); use Sunday's date as the week key
+  const day = now.getDay();
+  const diff = day === 0 ? 0 : 7 - day;
+  const sunday = new Date(now);
+  sunday.setDate(now.getDate() + diff);
+  return sunday.toISOString().split("T")[0];
 }
-function saveActiveModule(m) {
-  localStorage.setItem("active_module", m);
+
+function loadReflection(weekKey) {
+  const raw = localStorage.getItem(`reflection:${weekKey}`);
+  return raw ? JSON.parse(raw) : null;
+}
+
+function saveReflection(weekKey, data) {
+  localStorage.setItem(`reflection:${weekKey}`, JSON.stringify(data));
+}
+
+function reflectionDismissedThisWeek(weekKey) {
+  const r = loadReflection(weekKey);
+  return r && (r.note || r.skipped);
 }
 
 export default function App() {
@@ -23,14 +42,13 @@ export default function App() {
   const [installPrompt, setInstallPrompt] = useState(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
   const [showIosBanner, setShowIosBanner] = useState(false);
+  const [showReflection, setShowReflection] = useState(false);
 
   useEffect(() => {
     const handler = (e) => {
       e.preventDefault();
       setInstallPrompt(e);
-      if (!localStorage.getItem("install_dismissed")) {
-        setShowInstallBanner(true);
-      }
+      if (!localStorage.getItem("install_dismissed")) setShowInstallBanner(true);
     };
     window.addEventListener("beforeinstallprompt", handler);
     return () => window.removeEventListener("beforeinstallprompt", handler);
@@ -44,6 +62,18 @@ export default function App() {
       setShowIosBanner(true);
     }
   }, []);
+
+  // Show Sunday reflection if it's Sunday and not yet handled this week
+  useEffect(() => {
+    const today = new Date();
+    const isSunday = today.getDay() === 0;
+    if (isSunday && activeModule === "fitness") {
+      const weekKey = getThisWeekKey();
+      if (!reflectionDismissedThisWeek(weekKey)) {
+        setShowReflection(true);
+      }
+    }
+  }, [activeModule]);
 
   function switchModule(m) {
     setActiveModule(m);
@@ -89,7 +119,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Header */}
       <div style={{ borderBottom: "1px solid #E8DFCB", background: "#F4F1EA", position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
           <div>
@@ -105,22 +134,19 @@ export default function App() {
           </button>
         </div>
 
-        {/* Module switcher */}
         <div style={{ maxWidth: 1100, margin: "0 auto", padding: "0 20px 12px", display: "flex", gap: 6 }}>
-          <button
-            className={`module-tab ${activeModule === "fitness" ? "active" : ""}`}
-            onClick={() => switchModule("fitness")}
-          >
+          <button className={`module-tab ${activeModule === "fitness" ? "active" : ""}`} onClick={() => switchModule("fitness")}>
             <Dumbbell size={14} /> Fitness
           </button>
-          <button
-            className={`module-tab ${activeModule === "habits" ? "active" : ""}`}
-            onClick={() => switchModule("habits")}
-          >
+          <button className={`module-tab ${activeModule === "habits" ? "active" : ""}`} onClick={() => switchModule("habits")}>
             <Sprout size={14} /> Habits
           </button>
         </div>
       </div>
+
+      {showReflection && activeModule === "fitness" && (
+        <SundayReflectionCard onDismiss={() => setShowReflection(false)} />
+      )}
 
       {activeModule === "fitness" && <FitnessModule onOpenSettings={() => setSettingsOpen(true)} />}
       {activeModule === "habits" && <HabitsModule />}
@@ -128,6 +154,120 @@ export default function App() {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
+}
+
+function SundayReflectionCard({ onDismiss }) {
+  const [note, setNote] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const weekKey = getThisWeekKey();
+
+  // Compute weekly summary from local data
+  const summary = computeWeeklySummary();
+
+  function submit() {
+    saveReflection(weekKey, { note: note.trim(), savedAt: new Date().toISOString() });
+    setSubmitted(true);
+    setTimeout(onDismiss, 1500);
+  }
+
+  function skip() {
+    saveReflection(weekKey, { skipped: true, savedAt: new Date().toISOString() });
+    onDismiss();
+  }
+
+  return (
+    <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 20px 0" }}>
+      <div style={{ background: "#ECE4CF", borderRadius: 12, padding: 20, position: "relative" }}>
+        <button onClick={skip} className="ft-icon-btn" style={{ position: "absolute", top: 8, right: 8 }}>
+          <X size={14} />
+        </button>
+        <div style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8A7B5E", marginBottom: 8, fontWeight: 600 }}>
+          This week
+        </div>
+        <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 16, color: "#2A2419", lineHeight: 1.5, marginBottom: 12 }}>
+          {summary}
+        </div>
+        {!submitted ? (
+          <>
+            <div style={{ fontSize: 12, color: "#6B5530", marginBottom: 8 }}>
+              Anything to remember for next week?
+            </div>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="One sentence. Or skip."
+              style={{
+                width: "100%", minHeight: 60, padding: 10,
+                background: "#FCFAF5", border: "1px solid #C8B894",
+                borderRadius: 8, fontFamily: "inherit", fontSize: 13,
+                color: "#2A2419", resize: "vertical", outline: "none"
+              }}
+            />
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="ft-btn" onClick={submit} disabled={!note.trim()} style={{ opacity: note.trim() ? 1 : 0.5 }}>
+                Save
+              </button>
+              <button className="ft-btn ft-btn-ghost" onClick={skip}>Skip this week</button>
+            </div>
+          </>
+        ) : (
+          <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", color: "#6B5530", fontSize: 14 }}>
+            Saved. See you next Sunday.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function computeWeeklySummary() {
+  // Look at last 7 days
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let sessionsTrained = 0;
+  let sessionsPlanned = 0;
+  let habitDone = 0;
+  let habitTotal = 0;
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = d.toISOString().split("T")[0];
+
+    // Workout sessions
+    try {
+      const w = localStorage.getItem(`workout:${key}`);
+      if (w) {
+        const data = JSON.parse(w);
+        if (!data.isRest) {
+          sessionsPlanned++;
+          const done = data.exercises?.filter((e) => e.completed).length || 0;
+          if (done > 0 || data.partial) sessionsTrained++;
+        }
+      }
+    } catch {}
+
+    // Habits
+    try {
+      const h = localStorage.getItem(`habits:${key}`);
+      if (h) {
+        const data = JSON.parse(h);
+        const habitListRaw = localStorage.getItem("habits_list_v2");
+        const habits = habitListRaw ? JSON.parse(habitListRaw) : [];
+        habits.forEach((hb) => {
+          habitTotal++;
+          if (data[hb.id] === true) habitDone++;
+        });
+      }
+    } catch {}
+  }
+
+  const habitRate = habitTotal > 0 ? Math.round((habitDone / habitTotal) * 100) : 0;
+  const parts = [];
+  if (sessionsPlanned > 0) parts.push(`Trained ${sessionsTrained} of ${sessionsPlanned} sessions`);
+  if (habitTotal > 0) parts.push(`Habit consistency ${habitRate}%`);
+  if (parts.length === 0) return "A quiet week. Whatever happened, here you are.";
+  return parts.join(". ") + ".";
 }
 
 function SettingsModal({ onClose }) {
@@ -203,7 +343,7 @@ function SettingsModal({ onClose }) {
         <div style={{ marginBottom: 24, padding: 16, background: "#ECE4CF", borderRadius: 10 }}>
           <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, marginBottom: 6 }}>Backup your data</div>
           <div style={{ fontSize: 12, color: "#6B5530", marginBottom: 10, lineHeight: 1.5 }}>
-            Your training history and habit streaks live only on this phone. Export occasionally so you don't lose them.
+            Your training history and habit streaks live only on this phone. Export weekly so you don't lose them.
           </div>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button className="ft-btn ft-btn-ghost" onClick={exportData}>
@@ -248,6 +388,7 @@ function Styles() {
       }
       .ft-exercise.done { background: #F0EAD8; opacity: 0.75; }
       .ft-exercise.done .ft-name { text-decoration: line-through; color: #8A7B5E; }
+      .ft-exercise.partial { background: #F4EDD9; border-color: #D4B878; }
       .ft-exercise.ai-updated {
         border-color: #B8860B;
         box-shadow: 0 0 0 2px rgba(184,134,11,0.1);
@@ -304,6 +445,11 @@ function Styles() {
       .ft-btn-ai {
         background: linear-gradient(135deg, #6B5530, #B8860B);
         color: #F4F1EA;
+      }
+      .ft-btn-cycle {
+        background: transparent;
+        color: #B8385C;
+        border: 1px solid #E8B5C4;
       }
 
       .ft-icon-btn {
@@ -375,6 +521,24 @@ function Styles() {
 
       .spin { animation: spin 1s linear infinite; }
       @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+      .greeting-line {
+        font-family: 'Fraunces', serif;
+        font-style: italic;
+        font-size: 15px;
+        color: #6B5530;
+        line-height: 1.4;
+        margin-bottom: 12px;
+      }
+
+      .cycle-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: #B8385C;
+        font-weight: 500;
+        font-size: 12px;
+      }
 
       @media (max-width: 720px) {
         .ft-grid { grid-template-columns: 1fr !important; }
