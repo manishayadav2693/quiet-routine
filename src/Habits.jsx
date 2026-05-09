@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Check, Plus, Trash2, ArrowUp, ArrowDown, Edit2, X, Flame, Award, AlertCircle } from "lucide-react";
+import { Check, Plus, Trash2, ArrowUp, ArrowDown, Edit2, X, Award, AlertCircle } from "lucide-react";
 
 const DEFAULT_HABITS = [
   { id: "h1", name: "Wake up at 6:30 AM", time: "Morning" },
@@ -23,24 +23,13 @@ const DEFAULT_HABITS = [
 
 const TIME_GROUPS = ["Morning", "Daytime", "Evening", "Night", "All-day"];
 const TIME_LABELS = {
-  "Morning": "Morning",
-  "Daytime": "Daytime",
-  "Evening": "Evening",
-  "Night": "Night",
-  "All-day": "All-day rules",
+  "Morning": "Morning", "Daytime": "Daytime", "Evening": "Evening",
+  "Night": "Night", "All-day": "All-day rules",
 };
 
-function formatDate(date) {
-  return date.toISOString().split("T")[0];
-}
+function formatDate(date) { return date.toISOString().split("T")[0]; }
+function addDays(date, days) { const d = new Date(date); d.setDate(d.getDate() + days); return d; }
 
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-// ---------- Storage ----------
 function loadHabits() {
   try {
     const raw = localStorage.getItem("habits_list_v2");
@@ -49,71 +38,51 @@ function loadHabits() {
       return DEFAULT_HABITS;
     }
     return JSON.parse(raw);
-  } catch {
-    return DEFAULT_HABITS;
-  }
+  } catch { return DEFAULT_HABITS; }
 }
 
-function saveHabits(habits) {
-  localStorage.setItem("habits_list_v2", JSON.stringify(habits));
-}
+function saveHabits(habits) { localStorage.setItem("habits_list_v2", JSON.stringify(habits)); }
 
 function loadCompletions(dateKey) {
-  try {
-    const raw = localStorage.getItem(`habits:${dateKey}`);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
+  try { const raw = localStorage.getItem(`habits:${dateKey}`); return raw ? JSON.parse(raw) : {}; } catch { return {}; }
 }
 
 function saveCompletions(dateKey, completions) {
   localStorage.setItem(`habits:${dateKey}`, JSON.stringify(completions));
 }
 
-// ---------- Streak calculation ----------
-function calculateStreaks(habitId) {
+// Consistency rate (replaces hard streak) — % of last 7 days
+function getConsistencyRate(habitId, days = 7) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
-  let currentStreak = 0;
-  let cursor = new Date(today);
-
-  const todayDone = (loadCompletions(formatDate(today))[habitId] === true);
-  if (!todayDone) {
-    cursor = addDays(today, -1);
+  let done = 0;
+  for (let i = 0; i < days; i++) {
+    const d = addDays(today, -i);
+    const completions = loadCompletions(formatDate(d));
+    if (completions[habitId] === true) done++;
   }
+  return { done, total: days };
+}
 
-  while (true) {
-    const completions = loadCompletions(formatDate(cursor));
-    if (completions[habitId] === true) {
-      currentStreak++;
-      cursor = addDays(cursor, -1);
-    } else {
-      break;
-    }
-    if (currentStreak > 730) break;
-  }
-
-  if (todayDone) currentStreak++;
-
-  let bestStreak = 0;
-  let runningStreak = 0;
-  for (let i = 365; i >= 0; i--) {
+// Best streak — kept as a quiet achievement medal
+function getBestStreak(habitId) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  let best = 0;
+  let running = 0;
+  for (let i = 90; i >= 0; i--) {
     const d = addDays(today, -i);
     const completions = loadCompletions(formatDate(d));
     if (completions[habitId] === true) {
-      runningStreak++;
-      if (runningStreak > bestStreak) bestStreak = runningStreak;
+      running++;
+      if (running > best) best = running;
     } else {
-      runningStreak = 0;
+      running = 0;
     }
   }
-
-  return { current: currentStreak, best: bestStreak };
+  return best;
 }
 
-// ---------- Main component ----------
 export default function HabitsModule() {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -122,7 +91,7 @@ export default function HabitsModule() {
   const [habits, setHabits] = useState([]);
   const [completions, setCompletions] = useState({});
   const [editorOpen, setEditorOpen] = useState(false);
-  const [streaksMap, setStreaksMap] = useState({});
+  const [statsMap, setStatsMap] = useState({});
 
   useEffect(() => {
     setHabits(loadHabits());
@@ -132,9 +101,12 @@ export default function HabitsModule() {
   useEffect(() => {
     const map = {};
     habits.forEach((h) => {
-      map[h.id] = calculateStreaks(h.id);
+      map[h.id] = {
+        consistency: getConsistencyRate(h.id, 7),
+        best: getBestStreak(h.id),
+      };
     });
-    setStreaksMap(map);
+    setStatsMap(map);
   }, [habits, completions]);
 
   function toggleHabit(id) {
@@ -226,7 +198,7 @@ export default function HabitsModule() {
               key={habit.id}
               habit={habit}
               completed={!!completions[habit.id]}
-              streak={streaksMap[habit.id] || { current: 0, best: 0 }}
+              stats={statsMap[habit.id] || { consistency: { done: 0, total: 7 }, best: 0 }}
               onToggle={() => toggleHabit(habit.id)}
             />
           ))}
@@ -239,7 +211,7 @@ export default function HabitsModule() {
             No habits yet.
           </div>
           <div style={{ fontSize: 13, color: "#8A7B5E", marginTop: 8, marginBottom: 16 }}>
-            Add your first habit to start a streak.
+            Add your first habit to start tracking.
           </div>
           <button className="ft-btn" onClick={() => setEditorOpen(true)}>
             <Plus size={14} /> Add habit
@@ -261,7 +233,10 @@ export default function HabitsModule() {
   );
 }
 
-function HabitCard({ habit, completed, streak, onToggle }) {
+function HabitCard({ habit, completed, stats, onToggle }) {
+  const { consistency, best } = stats;
+  const strong = consistency.done >= 5;
+
   return (
     <div className={`ft-exercise ${completed ? "done" : ""}`} style={{ padding: "14px 16px" }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
@@ -279,19 +254,14 @@ function HabitCard({ habit, completed, streak, onToggle }) {
               <span>{habit.note}</span>
             </div>
           )}
-          <div style={{ display: "flex", gap: 12, marginTop: 6, alignItems: "center", fontSize: 11, color: "#8A7B5E" }}>
-            {streak.current > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 3, color: streak.current >= 7 ? "#B8860B" : "#6B5530", fontWeight: 500 }}>
-                <Flame size={11} /> {streak.current} day{streak.current !== 1 ? "s" : ""}
+          <div style={{ display: "flex", gap: 12, marginTop: 6, alignItems: "center", fontSize: 11, color: "#8A7B5E", flexWrap: "wrap" }}>
+            <span style={{ color: strong ? "#6B5530" : "#8A7B5E", fontWeight: strong ? 500 : 400 }}>
+              {consistency.done} of last {consistency.total} days
+            </span>
+            {best >= 3 && (
+              <span style={{ display: "flex", alignItems: "center", gap: 3, opacity: 0.7 }}>
+                <Award size={11} /> best run: {best}
               </span>
-            )}
-            {streak.best > streak.current && streak.best > 0 && (
-              <span style={{ display: "flex", alignItems: "center", gap: 3 }}>
-                <Award size={11} /> best {streak.best}
-              </span>
-            )}
-            {streak.current === 0 && streak.best === 0 && (
-              <span style={{ fontStyle: "italic", color: "#B8AC92" }}>start a streak today</span>
             )}
           </div>
         </div>
@@ -344,7 +314,7 @@ function HabitEditorModal({ habits, onAdd, onDelete, onUpdate, onMove, onClose }
         </div>
 
         <div style={{ fontSize: 12, color: "#8A7B5E", marginBottom: 16, lineHeight: 1.5 }}>
-          Reorder, rename, add a reminder note, or delete. Past streak data is preserved on delete.
+          Reorder, rename, add a reminder note, or delete. Past data is preserved on delete.
         </div>
 
         {habits.map((habit, idx) => (
