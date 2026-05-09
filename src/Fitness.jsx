@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Check, Plus, ChevronLeft, ChevronRight, Trash2, MapPin, Dumbbell, Calendar, X, Edit2, ArrowUp, ArrowDown, Sparkles, Loader2 } from "lucide-react";
+import { Check, Plus, ChevronLeft, ChevronRight, Trash2, MapPin, Dumbbell, Calendar, X, Edit2, ArrowUp, ArrowDown, Sparkles, Loader2, Droplet, MinusCircle } from "lucide-react";
 
 // ---------- Plan generation ----------
 const DELHI_WORKOUTS = {
@@ -98,7 +98,6 @@ function getWorkoutForDay(date, travelDays) {
   const dayIdx = date.getDay();
   const isoDate = date.toISOString().split("T")[0];
   const inBhubaneswar = travelDays.includes(isoDate);
-
   if (dayIdx === 6) return { ...DELHI_WORKOUTS.saturday };
   if (dayIdx === 0) return { ...DELHI_WORKOUTS.sunday };
   if (dayIdx === 1) return { ...REST_DAY };
@@ -117,50 +116,24 @@ function startOfWeek(date) {
   d.setHours(0, 0, 0, 0);
   return d;
 }
-
-function addDays(date, days) {
-  const d = new Date(date);
-  d.setDate(d.getDate() + days);
-  return d;
-}
-
-function formatDate(date) {
-  return date.toISOString().split("T")[0];
-}
-
-function formatLong(date) {
-  return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
-}
-
-function isSameDay(a, b) {
-  return a.toDateString() === b.toDateString();
-}
+function addDays(date, days) { const d = new Date(date); d.setDate(d.getDate() + days); return d; }
+function formatDate(date) { return date.toISOString().split("T")[0]; }
+function formatLong(date) { return date.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }); }
+function isSameDay(a, b) { return a.toDateString() === b.toDateString(); }
 
 function loadProgress(dateKey) {
-  try {
-    const raw = localStorage.getItem(`workout:${dateKey}`);
-    return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
+  try { const raw = localStorage.getItem(`workout:${dateKey}`); return raw ? JSON.parse(raw) : null; } catch { return null; }
 }
-
 function saveProgress(dateKey, data) {
   try { localStorage.setItem(`workout:${dateKey}`, JSON.stringify(data)); } catch (e) { console.error(e); }
 }
-
 function loadTravelDays() {
-  try {
-    const raw = localStorage.getItem("travelDays");
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+  try { const raw = localStorage.getItem("travelDays"); return raw ? JSON.parse(raw) : []; } catch { return []; }
 }
-
 function saveTravelDays(days) {
   try { localStorage.setItem("travelDays", JSON.stringify(days)); } catch (e) { console.error(e); }
 }
-
-function loadApiKey() {
-  return localStorage.getItem("anthropic_api_key") || "";
-}
+function loadApiKey() { return localStorage.getItem("anthropic_api_key") || ""; }
 
 function loadHistoricalSessions(fromDate, toDate) {
   const sessions = [];
@@ -177,6 +150,70 @@ function loadHistoricalSessions(fromDate, toDate) {
   return sessions;
 }
 
+// ---------- CYCLE TRACKING ----------
+const AVG_CYCLE_LENGTH = 25;
+const PHASE_NAMES = {
+  menstrual: "Menstrual",
+  follicular: "Follicular",
+  ovulation: "Ovulation",
+  luteal: "Luteal",
+};
+
+function loadCycleStart() { return localStorage.getItem("cycle_last_start") || null; }
+function saveCycleStart(iso) { localStorage.setItem("cycle_last_start", iso); }
+
+function getCyclePhase(daysSinceStart) {
+  if (daysSinceStart === null || daysSinceStart < 0) return null;
+  const dayInCycle = (daysSinceStart % AVG_CYCLE_LENGTH) + 1;
+  if (dayInCycle <= 5) return { phase: "menstrual", day: dayInCycle, total: AVG_CYCLE_LENGTH };
+  if (dayInCycle <= 13) return { phase: "follicular", day: dayInCycle, total: AVG_CYCLE_LENGTH };
+  if (dayInCycle <= 16) return { phase: "ovulation", day: dayInCycle, total: AVG_CYCLE_LENGTH };
+  return { phase: "luteal", day: dayInCycle, total: AVG_CYCLE_LENGTH };
+}
+
+function getDaysSince(startISO, currentDate) {
+  if (!startISO) return null;
+  const start = new Date(startISO);
+  start.setHours(0, 0, 0, 0);
+  const ms = currentDate.getTime() - start.getTime();
+  return Math.floor(ms / (1000 * 60 * 60 * 24));
+}
+
+// ---------- CONTEXTUAL GREETING ----------
+function getGreeting(isToday, workoutTitle, isRest, cyclePhase) {
+  if (!isToday) return null;
+
+  if (cyclePhase) {
+    if (cyclePhase.phase === "menstrual" && cyclePhase.day <= 2) {
+      return "Honour the slow-down. Nothing today is mandatory.";
+    }
+    if (cyclePhase.phase === "menstrual") {
+      return "Move gently. Listen first, lift second.";
+    }
+    if (cyclePhase.phase === "follicular" && !isRest) {
+      return "Strong window. Your body wants to push today.";
+    }
+    if (cyclePhase.phase === "ovulation" && !isRest) {
+      return "Peak strength phase. Aim high — the data will follow.";
+    }
+    if (cyclePhase.phase === "luteal" && !isRest) {
+      return "Steady week. Maintain, don't strain.";
+    }
+  }
+
+  if (isRest) return "Rest. The work is in the recovery.";
+  if (workoutTitle?.includes("Glute") || workoutTitle?.includes("Hip")) {
+    return "Train today. Hip thrusts are the priority.";
+  }
+  if (workoutTitle?.includes("Upper") && workoutTitle?.includes("Pull")) {
+    return "Train today. Show up for the rows.";
+  }
+  if (workoutTitle?.includes("Upper")) {
+    return "Train today. Press strong, breathe deep.";
+  }
+  return "Train today. One small step, every session.";
+}
+
 // ---------- Module ----------
 export default function FitnessModule({ onOpenSettings }) {
   const today = new Date();
@@ -188,6 +225,8 @@ export default function FitnessModule({ onOpenSettings }) {
   const [travelDays, setTravelDays] = useState([]);
   const [travelModalOpen, setTravelModalOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [cycleModalOpen, setCycleModalOpen] = useState(false);
+  const [cycleStart, setCycleStart] = useState(loadCycleStart());
 
   useEffect(() => { setTravelDays(loadTravelDays()); }, []);
 
@@ -203,6 +242,7 @@ export default function FitnessModule({ onOpenSettings }) {
         duration: workout.duration,
         location: workout.location,
         isRest: workout.isRest || false,
+        partial: false,
         exercises: workout.exercises.map((ex, i) => ({
           id: `pre-${i}-${Date.now()}`,
           ...ex,
@@ -226,10 +266,10 @@ export default function FitnessModule({ onOpenSettings }) {
       if (stored) {
         const total = stored.exercises.length;
         const done = stored.exercises.filter((e) => e.completed).length;
-        map[key] = { done, total, isRest: stored.isRest };
+        map[key] = { done, total, isRest: stored.isRest, partial: stored.partial };
       } else {
         const w = getWorkoutForDay(d, travelDays);
-        map[key] = { done: 0, total: w.exercises.length, isRest: w.isRest };
+        map[key] = { done: 0, total: w.exercises.length, isRest: w.isRest, partial: false };
       }
     }
     setWeekProgressMap(map);
@@ -275,14 +315,18 @@ export default function FitnessModule({ onOpenSettings }) {
     persist({ ...progress, exercises: [...progress.exercises, newEx] });
   }
 
-  function updateSessionNote(note) {
-    persist({ ...progress, sessionNote: note });
+  function updateSessionNote(note) { persist({ ...progress, sessionNote: note }); }
+
+  function markPartial() {
+    persist({ ...progress, partial: true });
+  }
+
+  function unmarkPartial() {
+    persist({ ...progress, partial: false });
   }
 
   function toggleTravelDay(dateKey) {
-    const updated = travelDays.includes(dateKey)
-      ? travelDays.filter((d) => d !== dateKey)
-      : [...travelDays, dateKey];
+    const updated = travelDays.includes(dateKey) ? travelDays.filter((d) => d !== dateKey) : [...travelDays, dateKey];
     setTravelDays(updated);
     saveTravelDays(updated);
   }
@@ -291,11 +335,24 @@ export default function FitnessModule({ onOpenSettings }) {
     persist({ ...progress, exercises: updatedExercises });
   }
 
+  function handleSaveCycle(dateStr) {
+    const iso = new Date(dateStr).toISOString();
+    saveCycleStart(iso);
+    setCycleStart(iso);
+    setCycleModalOpen(false);
+  }
+
   if (!progress) return null;
+
+  const isToday = isSameDay(selectedDate, today);
+  const daysSinceCycle = cycleStart ? getDaysSince(cycleStart, selectedDate) : null;
+  const cyclePhase = getCyclePhase(daysSinceCycle);
+  const greeting = getGreeting(isToday, progress.title, progress.isRest, cyclePhase);
 
   const totalEx = progress.exercises.length;
   const doneEx = progress.exercises.filter((e) => e.completed).length;
   const pct = totalEx > 0 ? Math.round((doneEx / totalEx) * 100) : 0;
+  const showPartialOption = !progress.isRest && doneEx > 0 && doneEx < totalEx && !progress.partial;
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px" }}>
@@ -309,6 +366,13 @@ export default function FitnessModule({ onOpenSettings }) {
         <div style={{ display: "flex", gap: 6 }}>
           <button className="ft-btn ft-btn-ai" onClick={() => setAiModalOpen(true)} style={{ padding: "8px 12px" }}>
             <Sparkles size={13} /> AI
+          </button>
+          <button
+            className={cyclePhase ? "ft-btn ft-btn-cycle" : "ft-btn ft-btn-ghost"}
+            onClick={() => setCycleModalOpen(true)}
+            style={{ padding: "8px 12px" }}
+          >
+            <Droplet size={13} />
           </button>
           <button className="ft-btn ft-btn-ghost" onClick={() => setTravelModalOpen(true)} style={{ padding: "8px 12px" }}>
             <MapPin size={13} />
@@ -324,11 +388,11 @@ export default function FitnessModule({ onOpenSettings }) {
           const d = addDays(weekStart, i);
           const dKey = formatDate(d);
           const isActive = isSameDay(d, selectedDate);
-          const isToday = isSameDay(d, today);
+          const isTodayDay = isSameDay(d, today);
           const wp = weekProgressMap[dKey];
           const inTravel = travelDays.includes(dKey);
           return (
-            <div key={i} className={`ft-day-pill ${isActive ? "active" : ""} ${isToday ? "today" : ""}`} onClick={() => setSelectedDate(d)}>
+            <div key={i} className={`ft-day-pill ${isActive ? "active" : ""} ${isTodayDay ? "today" : ""}`} onClick={() => setSelectedDate(d)}>
               <div style={{ fontSize: 10, opacity: 0.7, textTransform: "uppercase", letterSpacing: "0.05em" }}>
                 {d.toLocaleDateString("en-US", { weekday: "short" })}
               </div>
@@ -337,7 +401,14 @@ export default function FitnessModule({ onOpenSettings }) {
               </div>
               <div style={{ display: "flex", gap: 3, marginTop: 4, alignItems: "center", height: 6 }}>
                 {wp && wp.isRest && <div style={{ width: 4, height: 4, borderRadius: 2, background: isActive ? "#F4F1EA" : "#C8B894", opacity: 0.6 }} />}
-                {wp && !wp.isRest && wp.total > 0 && (
+                {wp && !wp.isRest && wp.partial && (
+                  <div style={{
+                    width: 6, height: 6, borderRadius: 3,
+                    background: `linear-gradient(90deg, ${isActive ? "#F4F1EA" : "#6B5530"} 50%, transparent 50%)`,
+                    border: `1px solid ${isActive ? "#F4F1EA" : "#6B5530"}`
+                  }} />
+                )}
+                {wp && !wp.isRest && !wp.partial && wp.total > 0 && (
                   wp.done === wp.total ? (
                     <div style={{ width: 6, height: 6, borderRadius: 3, background: isActive ? "#F4F1EA" : "#6B5530" }} />
                   ) : wp.done > 0 ? (
@@ -351,15 +422,19 @@ export default function FitnessModule({ onOpenSettings }) {
         })}
       </div>
 
+      {greeting && (
+        <div className="greeting-line">{greeting}</div>
+      )}
+
       <div style={{ marginBottom: 20 }}>
         <div style={{ fontSize: 11, color: "#8A7B5E", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
-          {isSameDay(selectedDate, today) ? "Today" : ""}
+          {isToday ? "Today" : ""}
         </div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
           <h1 style={{ fontFamily: "Fraunces, serif", fontSize: 32, fontWeight: 500, margin: 0, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
             {formatLong(selectedDate)}
           </h1>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 12, color: "#6B5530" }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 12, color: "#6B5530", flexWrap: "wrap" }}>
             {progress.duration > 0 && (
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <Calendar size={12} /> {progress.duration} min
@@ -369,6 +444,11 @@ export default function FitnessModule({ onOpenSettings }) {
               <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 {progress.location === "delhi" ? <Dumbbell size={12} /> : <MapPin size={12} />}
                 {progress.location === "delhi" ? "Delhi · Weights" : "Bhubaneswar · Bands"}
+              </span>
+            )}
+            {cyclePhase && (
+              <span className="cycle-pill">
+                <Droplet size={12} /> {PHASE_NAMES[cyclePhase.phase]} · Day {cyclePhase.day}
               </span>
             )}
           </div>
@@ -381,7 +461,7 @@ export default function FitnessModule({ onOpenSettings }) {
       {totalEx > 0 && (
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12, color: "#6B5530" }}>
-            <span>{doneEx} of {totalEx} complete</span>
+            <span>{doneEx} of {totalEx} complete{progress.partial ? " · partial session" : ""}</span>
             <span>{pct}%</span>
           </div>
           <div className="progress-bar"><div className="progress-fill" style={{ width: `${pct}%` }} /></div>
@@ -416,6 +496,36 @@ export default function FitnessModule({ onOpenSettings }) {
             />
           ))}
 
+          {showPartialOption && (
+            <div style={{ marginTop: 12, padding: 14, background: "#FCFAF5", border: "1px dashed #C8B894", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontSize: 13, color: "#2A2419", fontWeight: 500 }}>Showing up counts.</div>
+                <div style={{ fontSize: 11, color: "#8A7B5E", marginTop: 2 }}>
+                  Done what you could? Mark it as a partial session.
+                </div>
+              </div>
+              <button className="ft-btn ft-btn-ghost" onClick={markPartial}>
+                <MinusCircle size={13} /> I did less
+              </button>
+            </div>
+          )}
+
+          {progress.partial && (
+            <div style={{ marginTop: 12, padding: 14, background: "#ECE4CF", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 200 }}>
+                <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419" }}>
+                  Got it. Today counted.
+                </div>
+                <div style={{ fontSize: 11, color: "#6B5530", marginTop: 4 }}>
+                  Marked as a partial session.
+                </div>
+              </div>
+              <button className="ft-btn ft-btn-ghost" onClick={unmarkPartial} style={{ fontSize: 11, padding: "6px 10px" }}>
+                Undo
+              </button>
+            </div>
+          )}
+
           <AddExerciseForm onAdd={addExercise} />
         </div>
 
@@ -446,10 +556,19 @@ export default function FitnessModule({ onOpenSettings }) {
         <TravelModal weekStart={weekStart} travelDays={travelDays} onToggle={toggleTravelDay} onClose={() => setTravelModalOpen(false)} />
       )}
 
+      {cycleModalOpen && (
+        <CycleModal
+          cycleStart={cycleStart}
+          onSave={handleSaveCycle}
+          onClose={() => setCycleModalOpen(false)}
+        />
+      )}
+
       {aiModalOpen && (
         <AiCoachModal
           currentSession={progress}
           currentDate={selectedDate}
+          cyclePhase={cyclePhase}
           onApply={applyAiSuggestions}
           onClose={() => setAiModalOpen(false)}
           onOpenSettings={() => { setAiModalOpen(false); onOpenSettings(); }}
@@ -631,7 +750,87 @@ function TravelModal({ weekStart, travelDays, onToggle, onClose }) {
   );
 }
 
-function AiCoachModal({ currentSession, currentDate, onApply, onClose, onOpenSettings }) {
+function CycleModal({ cycleStart, onSave, onClose }) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const [date, setDate] = useState(
+    cycleStart ? new Date(cycleStart).toISOString().split("T")[0] : today.toISOString().split("T")[0]
+  );
+
+  const currentPhase = cycleStart ? getCyclePhase(getDaysSince(cycleStart, today)) : null;
+  const nextPeriodETA = cycleStart ? (() => {
+    const start = new Date(cycleStart);
+    const next = new Date(start);
+    next.setDate(start.getDate() + AVG_CYCLE_LENGTH);
+    return next;
+  })() : null;
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <h2 style={{ fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 500, margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            <Droplet size={20} color="#B8385C" /> Cycle
+          </h2>
+          <button onClick={onClose} className="ft-icon-btn"><X size={20} /></button>
+        </div>
+
+        {currentPhase && (
+          <div style={{ padding: 14, background: "#F8E8ED", borderRadius: 10, marginBottom: 18, border: "1px solid #E8B5C4" }}>
+            <div style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em", color: "#8B4A60", marginBottom: 4, fontWeight: 600 }}>
+              Today
+            </div>
+            <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 18, color: "#2A2419" }}>
+              {PHASE_NAMES[currentPhase.phase]} · Day {currentPhase.day}
+            </div>
+            <div style={{ fontSize: 12, color: "#8B4A60", marginTop: 6, lineHeight: 1.5 }}>
+              {currentPhase.phase === "menstrual" && "Lower intensity. Hip thrusts can wait if you need them to."}
+              {currentPhase.phase === "follicular" && "Strong window. Good time to push for new PRs on big lifts."}
+              {currentPhase.phase === "ovulation" && "Peak strength phase. Aim high — your body's primed."}
+              {currentPhase.phase === "luteal" && "Maintenance week. Focus on form, not load."}
+            </div>
+            {nextPeriodETA && (
+              <div style={{ fontSize: 11, color: "#8B4A60", marginTop: 10, opacity: 0.8 }}>
+                Next period estimated: {nextPeriodETA.toLocaleDateString("en-US", { month: "long", day: "numeric" })}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ marginBottom: 16 }}>
+          <span className="ft-field-label">Last period start date</span>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+            max={today.toISOString().split("T")[0]}
+            style={{
+              width: "100%", padding: 10, marginTop: 4,
+              border: "1px solid #C8B894", borderRadius: 8,
+              background: "#FCFAF5", fontFamily: "inherit", fontSize: 14
+            }}
+          />
+          <div style={{ fontSize: 11, color: "#8A7B5E", marginTop: 8, lineHeight: 1.5 }}>
+            Cycle estimated at 25 days. Update this each month when your period starts.
+          </div>
+        </div>
+
+        <div style={{ padding: 14, background: "#ECE4CF", borderRadius: 10, marginBottom: 16, fontSize: 12, color: "#6B5530", lineHeight: 1.5 }}>
+          <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 13, marginBottom: 4, color: "#2A2419" }}>
+            How this is used
+          </div>
+          The AI Coach reads your phase to calibrate today's intensity. Your body, your call — the app informs, doesn't dictate.
+        </div>
+
+        <button className="ft-btn" onClick={() => onSave(date)} style={{ width: "100%", justifyContent: "center" }}>
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AiCoachModal({ currentSession, currentDate, cyclePhase, onApply, onClose, onOpenSettings }) {
   const [step, setStep] = useState("ready");
   const [analysis, setAnalysis] = useState(null);
   const [error, setError] = useState(null);
@@ -655,6 +854,7 @@ function AiCoachModal({ currentSession, currentDate, onApply, onClose, onOpenSet
           date: formatDate(currentDate),
           title: currentSession.title,
           location: currentSession.location,
+          cycle_phase: cyclePhase ? `${PHASE_NAMES[cyclePhase.phase]} · Day ${cyclePhase.day} of ${cyclePhase.total}` : null,
           exercises: currentSession.exercises.map((e) => ({
             id: e.id, name: e.name,
             prescribed_sets: e.sets, prescribed_reps: e.reps,
@@ -662,6 +862,7 @@ function AiCoachModal({ currentSession, currentDate, onApply, onClose, onOpenSet
         },
         history: sessions.map((s) => ({
           date: s.date, title: s.title, location: s.location,
+          partial: s.partial || false,
           exercises: s.exercises
             .filter((e) => e.completed || e.actualWeight || e.actualReps)
             .map((e) => ({
@@ -676,7 +877,17 @@ function AiCoachModal({ currentSession, currentDate, onApply, onClose, onOpenSet
         })),
       };
 
-      const prompt = `You are a strength coach for a returning lifter in her early 30s training to lose 4 kg, lose 3 inches off her hips, and build muscle. She trains 4 days/week (Sat & Sun 60 min, Tue & Thu 30–45 min). She has weights in Delhi and only resistance bands when traveling to Bhubaneswar. She is vegetarian.
+      const cycleGuidance = cyclePhase ? `
+
+CYCLE PHASE GUIDANCE:
+- Menstrual (Days 1-5): Reduce intensity 10-20% if she logged feeling rough. Suggest KEEP or slight reduction. Don't push for new PRs.
+- Follicular (Days 6-13): Best time for progressive overload. Lean toward INCREASE_LOAD or INCREASE_REPS.
+- Ovulation (Days 14-16): Peak strength. Aim for PRs on main lifts.
+- Luteal (Days 17-25): Maintenance. KEEP or slight INCREASE_REPS. Avoid new max efforts.
+
+Today she is in: ${PHASE_NAMES[cyclePhase.phase]} (Day ${cyclePhase.day}). Adjust suggestions accordingly.` : "";
+
+      const prompt = `You are a strength coach for a returning lifter in her early 30s training to lose 4 kg, lose 3 inches off her hips, and build muscle. She trains 4 days/week (Sat & Sun 60 min, Tue & Thu 30–45 min). She has weights in Delhi and only resistance bands when traveling to Bhubaneswar. She is vegetarian.${cycleGuidance}
 
 Today's planned session and her recent training history:
 
@@ -693,11 +904,12 @@ Rules:
 - Only ONE progression lever per exercise per week
 - Respect equipment: bands for Bhubaneswar, weights for Delhi
 - If history is sparse (< 2 prior sessions), KEEP and note "build baseline first"
-- Be conservative
+- If recent sessions were marked partial, lean toward KEEP (recovery may be needed)
+- Be conservative — small wins compound
 
 Respond ONLY with valid JSON, no markdown:
 {
-  "summary": "2-3 sentences",
+  "summary": "2-3 sentences mentioning cycle phase if relevant and her recent progress",
   "suggestions": [
     {
       "exercise_id": "id",
@@ -775,7 +987,7 @@ Respond ONLY with valid JSON, no markdown:
         {step === "ready" && (
           <>
             <div style={{ fontSize: 13, color: "#6B5530", marginBottom: 20, lineHeight: 1.6 }}>
-              I'll look at your last 4 weeks of logged sessions and suggest progressive overload tweaks for <strong>today's workout</strong>.
+              I'll look at your last 4 weeks of logged sessions {cyclePhase && <span>and your <strong>{PHASE_NAMES[cyclePhase.phase]} phase</strong></span>} and suggest progressive overload tweaks for <strong>today's workout</strong>.
               <br /><br />
               <span style={{ color: "#8A7B5E", fontSize: 12 }}>
                 {!apiKey && <span style={{ color: "#B8860B" }}>⚠ Add your API key in Settings first.<br /><br /></span>}
