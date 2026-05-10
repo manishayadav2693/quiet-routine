@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Check, Plus, ChevronLeft, ChevronRight, Trash2, MapPin, Dumbbell, Calendar, X, Edit2, ArrowUp, ArrowDown, Sparkles, Loader2, Droplet, MinusCircle } from "lucide-react";
+import { Check, Plus, ChevronLeft, ChevronRight, Trash2, MapPin, Dumbbell, Calendar, X, Edit2, ArrowUp, ArrowDown, Sparkles, Loader2, Droplet, MinusCircle, PauseCircle, Forward } from "lucide-react";
 
 // ---------- Plan generation ----------
 const DELHI_WORKOUTS = {
@@ -179,6 +179,37 @@ function getDaysSince(startISO, currentDate) {
   return Math.floor(ms / (1000 * 60 * 60 * 24));
 }
 
+// ---------- DEFERRED SESSIONS & CARRY QUEUE ----------
+// A session has status: undefined (default) | "deferred" | "released" | "carried" | "made_up"
+function getDeferredThisWeek(weekStart) {
+  const deferred = [];
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(weekStart, i);
+    const key = formatDate(d);
+    const stored = loadProgress(key);
+    if (stored && stored.status === "deferred") {
+      deferred.push({ date: key, title: stored.title, location: stored.location, exercises: stored.exercises });
+    }
+  }
+  return deferred;
+}
+
+function getCarryQueue() {
+  try { return JSON.parse(localStorage.getItem("carry_queue") || "[]"); } catch { return []; }
+}
+
+function saveCarryQueue(queue) {
+  localStorage.setItem("carry_queue", JSON.stringify(queue));
+}
+
+function popFromCarryQueue() {
+  const queue = getCarryQueue();
+  if (queue.length === 0) return null;
+  const item = queue.shift();
+  saveCarryQueue(queue);
+  return item;
+}
+
 // ---------- CONTEXTUAL GREETING ----------
 function getGreeting(isToday, workoutTitle, isRest, cyclePhase) {
   if (!isToday) return null;
@@ -226,6 +257,8 @@ export default function FitnessModule({ onOpenSettings }) {
   const [travelModalOpen, setTravelModalOpen] = useState(false);
   const [aiModalOpen, setAiModalOpen] = useState(false);
   const [cycleModalOpen, setCycleModalOpen] = useState(false);
+  const [deferModalOpen, setDeferModalOpen] = useState(false);
+  const [resurfaceModalOpen, setResurfaceModalOpen] = useState(false);
   const [cycleStart, setCycleStart] = useState(loadCycleStart());
 
   useEffect(() => { setTravelDays(loadTravelDays()); }, []);
@@ -237,20 +270,38 @@ export default function FitnessModule({ onOpenSettings }) {
       setProgress(stored);
     } else {
       const workout = getWorkoutForDay(selectedDate, travelDays);
+      // Check for carry queue items on workout days only (not rest)
+      let exercises = workout.exercises.map((ex, i) => ({
+        id: `pre-${i}-${Date.now()}`,
+        ...ex,
+        completed: false, actualWeight: "", actualReps: "", actualNotes: "",
+      }));
+      let title = workout.title;
+      let carryNote = null;
+
+      // Auto-merge carry queue on Monday/first workout day of week
+      if (!workout.isRest && isSameDay(selectedDate, new Date(new Date().setHours(0,0,0,0)))) {
+        const queue = getCarryQueue();
+        if (queue.length > 0) {
+          // Pop the first item that matches current location type (Delhi/Bhubaneswar)
+          // Actually simpler: just take first item, append its exercises
+          const item = queue[0];
+          if (item) {
+            carryNote = `Carried over from last week: ${item.title}. Add what you can to today.`;
+            // Don't auto-add exercises — just note it. User decides.
+          }
+        }
+      }
+
       setProgress({
         title: workout.title,
         duration: workout.duration,
         location: workout.location,
         isRest: workout.isRest || false,
         partial: false,
-        exercises: workout.exercises.map((ex, i) => ({
-          id: `pre-${i}-${Date.now()}`,
-          ...ex,
-          completed: false,
-          actualWeight: "",
-          actualReps: "",
-          actualNotes: "",
-        })),
+        status: undefined,
+        carryNote,
+        exercises,
         sessionNote: "",
       });
     }
@@ -266,10 +317,10 @@ export default function FitnessModule({ onOpenSettings }) {
       if (stored) {
         const total = stored.exercises.length;
         const done = stored.exercises.filter((e) => e.completed).length;
-        map[key] = { done, total, isRest: stored.isRest, partial: stored.partial };
+        map[key] = { done, total, isRest: stored.isRest, partial: stored.partial, status: stored.status };
       } else {
         const w = getWorkoutForDay(d, travelDays);
-        map[key] = { done: 0, total: w.exercises.length, isRest: w.isRest, partial: false };
+        map[key] = { done: 0, total: w.exercises.length, isRest: w.isRest, partial: false, status: undefined };
       }
     }
     setWeekProgressMap(map);
@@ -325,6 +376,58 @@ export default function FitnessModule({ onOpenSettings }) {
     persist({ ...progress, partial: false });
   }
 
+  // ---- Deferral flow ----
+  function letItGo() {
+    persist({ ...progress, status: "released" });
+    setDeferModalOpen(false);
+  }
+
+  function deferThisWeek() {
+    persist({ ...progress, status: "deferred" });
+    setDeferModalOpen(false);
+  }
+
+  function carryToNextWeek() {
+    // Add to carry queue with origin metadata
+    const queue = getCarryQueue();
+    queue.push({
+      title: progress.title,
+      location: progress.location,
+      duration: progress.duration,
+      exercises: progress.exercises.map(e => ({ name: e.name, sets: e.sets, reps: e.reps, note: e.note })),
+      carriedFrom: formatDate(selectedDate),
+    });
+    saveCarryQueue(queue);
+    persist({ ...progress, status: "carried" });
+    setDeferModalOpen(false);
+  }
+
+  function resumeDeferredSession(deferredItem) {
+    // Load deferred session's exercises onto today's date
+    const newProgress = {
+      title: deferredItem.title + " (made up)",
+      duration: deferredItem.exercises ? 60 : 35,
+      location: deferredItem.location,
+      isRest: false,
+      partial: false,
+      status: undefined,
+      exercises: deferredItem.exercises.map((ex, i) => ({
+        id: `resume-${i}-${Date.now()}`,
+        name: ex.name, sets: ex.sets, reps: ex.reps, note: ex.note,
+        completed: false, actualWeight: "", actualReps: "", actualNotes: "",
+      })),
+      sessionNote: "",
+    };
+    persist(newProgress);
+    // Mark original as made up
+    const original = loadProgress(deferredItem.date);
+    if (original) {
+      original.status = "made_up";
+      saveProgress(deferredItem.date, original);
+    }
+    setResurfaceModalOpen(false);
+  }
+
   function toggleTravelDay(dateKey) {
     const updated = travelDays.includes(dateKey) ? travelDays.filter((d) => d !== dateKey) : [...travelDays, dateKey];
     setTravelDays(updated);
@@ -352,10 +455,35 @@ export default function FitnessModule({ onOpenSettings }) {
   const totalEx = progress.exercises.length;
   const doneEx = progress.exercises.filter((e) => e.completed).length;
   const pct = totalEx > 0 ? Math.round((doneEx / totalEx) * 100) : 0;
-  const showPartialOption = !progress.isRest && doneEx > 0 && doneEx < totalEx && !progress.partial;
+  const showPartialOption = !progress.isRest && doneEx > 0 && doneEx < totalEx && !progress.partial && !progress.status;
+
+  // Training debt for current week
+  const deferredThisWeek = getDeferredThisWeek(weekStart);
+  const carryQueueLen = getCarryQueue().length;
+
+  // Show "couldn't train today" button only on workout days that aren't done/deferred/released
+  const showCouldntTrainButton = !progress.isRest && doneEx === 0 && !progress.status && !progress.partial && isToday;
+
+  // On rest days (or any day), if there's a deferred session this week, show resume prompt
+  const showResumePrompt = progress.isRest && deferredThisWeek.length > 0 && isToday;
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 20px" }}>
+
+      {/* Training debt banner */}
+      {(deferredThisWeek.length > 0 || carryQueueLen > 0) && (
+        <div style={{ marginBottom: 16, padding: "10px 14px", background: "#FCFAF5", border: "1px solid #E8D5A8", borderRadius: 10, display: "flex", alignItems: "center", gap: 10, fontSize: 12, color: "#6B5530", lineHeight: 1.5 }}>
+          <PauseCircle size={14} color="#B8860B" style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            {deferredThisWeek.length > 0 && (
+              <span>Owed this week · {deferredThisWeek.length} session{deferredThisWeek.length > 1 ? "s" : ""} · {deferredThisWeek.map(d => d.title.replace(/Lower — /, "").replace(/Upper /, "")).join(", ")}</span>
+            )}
+            {deferredThisWeek.length === 0 && carryQueueLen > 0 && (
+              <span>Carried from last week · {carryQueueLen} session{carryQueueLen > 1 ? "s" : ""} pending</span>
+            )}
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 8 }}>
         <button onClick={() => setWeekStart(addDays(weekStart, -7))} style={{ background: "transparent", border: "none", cursor: "pointer", padding: 6, color: "#6B5530" }}>
           <ChevronLeft size={20} />
@@ -401,14 +529,26 @@ export default function FitnessModule({ onOpenSettings }) {
               </div>
               <div style={{ display: "flex", gap: 3, marginTop: 4, alignItems: "center", height: 6 }}>
                 {wp && wp.isRest && <div style={{ width: 4, height: 4, borderRadius: 2, background: isActive ? "#F4F1EA" : "#C8B894", opacity: 0.6 }} />}
-                {wp && !wp.isRest && wp.partial && (
+                {wp && !wp.isRest && wp.status === "deferred" && (
+                  <div style={{
+                    width: 7, height: 7, borderRadius: "50%",
+                    border: `1.5px dashed ${isActive ? "#F4F1EA" : "#B8860B"}`,
+                  }} />
+                )}
+                {wp && !wp.isRest && wp.status === "released" && (
+                  <div style={{ width: 4, height: 4, borderRadius: 2, background: isActive ? "#F4F1EA" : "#C8B894", opacity: 0.4 }} />
+                )}
+                {wp && !wp.isRest && wp.status === "carried" && (
+                  <div style={{ fontSize: 8, color: isActive ? "#F4F1EA" : "#8A7B5E", lineHeight: 1 }}>→</div>
+                )}
+                {wp && !wp.isRest && !wp.status && wp.partial && (
                   <div style={{
                     width: 6, height: 6, borderRadius: 3,
                     background: `linear-gradient(90deg, ${isActive ? "#F4F1EA" : "#6B5530"} 50%, transparent 50%)`,
                     border: `1px solid ${isActive ? "#F4F1EA" : "#6B5530"}`
                   }} />
                 )}
-                {wp && !wp.isRest && !wp.partial && wp.total > 0 && (
+                {wp && !wp.isRest && !wp.status && !wp.partial && wp.total > 0 && (
                   wp.done === wp.total ? (
                     <div style={{ width: 6, height: 6, borderRadius: 3, background: isActive ? "#F4F1EA" : "#6B5530" }} />
                   ) : wp.done > 0 ? (
@@ -496,6 +636,48 @@ export default function FitnessModule({ onOpenSettings }) {
             />
           ))}
 
+          {/* Status banners — released, deferred, carried */}
+          {progress.status === "released" && (
+            <div style={{ marginTop: 12, padding: 14, background: "#ECE4CF", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419" }}>
+                Let go.
+              </div>
+              <div style={{ fontSize: 11, color: "#6B5530", marginTop: 4 }}>
+                Body said no. Tomorrow continues as planned.
+              </div>
+            </div>
+          )}
+
+          {progress.status === "deferred" && (
+            <div style={{ marginTop: 12, padding: 14, background: "#FCFAF5", border: "1px solid #E8D5A8", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419", display: "flex", alignItems: "center", gap: 6 }}>
+                <PauseCircle size={14} color="#B8860B" /> Deferred to this week.
+              </div>
+              <div style={{ fontSize: 11, color: "#6B5530", marginTop: 4 }}>
+                Will resurface on a rest day. Or settle it on Sunday.
+              </div>
+            </div>
+          )}
+
+          {progress.status === "carried" && (
+            <div style={{ marginTop: 12, padding: 14, background: "#FCFAF5", border: "1px solid #E8D5A8", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419", display: "flex", alignItems: "center", gap: 6 }}>
+                <Forward size={14} color="#B8860B" /> Carried to next week.
+              </div>
+              <div style={{ fontSize: 11, color: "#6B5530", marginTop: 4 }}>
+                Added to next week's plan from the start.
+              </div>
+            </div>
+          )}
+
+          {progress.status === "made_up" && (
+            <div style={{ marginTop: 12, padding: 14, background: "#ECE4CF", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419" }}>
+                Made up later in the week.
+              </div>
+            </div>
+          )}
+
           {showPartialOption && (
             <div style={{ marginTop: 12, padding: 14, background: "#FCFAF5", border: "1px dashed #C8B894", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 200 }}>
@@ -522,6 +704,33 @@ export default function FitnessModule({ onOpenSettings }) {
               </div>
               <button className="ft-btn ft-btn-ghost" onClick={unmarkPartial} style={{ fontSize: 11, padding: "6px 10px" }}>
                 Undo
+              </button>
+            </div>
+          )}
+
+          {/* "Couldn't train today" entry point */}
+          {showCouldntTrainButton && (
+            <div style={{ marginTop: 16, padding: 14, background: "transparent", border: "1px dashed #C8B894", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 180, fontSize: 12, color: "#8A7B5E" }}>
+                Body or schedule got in the way?
+              </div>
+              <button className="ft-btn ft-btn-ghost" onClick={() => setDeferModalOpen(true)} style={{ fontSize: 12 }}>
+                Couldn't train today
+              </button>
+            </div>
+          )}
+
+          {/* Resume deferred session prompt on rest days */}
+          {showResumePrompt && (
+            <div style={{ marginTop: 16, padding: 16, background: "#FCFAF5", border: "1px solid #E8D5A8", borderRadius: 10 }}>
+              <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 14, color: "#2A2419", marginBottom: 6 }}>
+                You have {deferredThisWeek.length === 1 ? "a session" : `${deferredThisWeek.length} sessions`} deferred from this week.
+              </div>
+              <div style={{ fontSize: 12, color: "#6B5530", marginBottom: 12, lineHeight: 1.5 }}>
+                Today's a rest day. Train it now if you feel up to it, or keep resting — either is right.
+              </div>
+              <button className="ft-btn" onClick={() => setResurfaceModalOpen(true)}>
+                <Forward size={13} /> Train deferred session
               </button>
             </div>
           )}
@@ -561,6 +770,38 @@ export default function FitnessModule({ onOpenSettings }) {
           cycleStart={cycleStart}
           onSave={handleSaveCycle}
           onClose={() => setCycleModalOpen(false)}
+        />
+      )}
+
+      {deferModalOpen && (
+        <DeferModal
+          progressTitle={progress.title}
+          cyclePhase={cyclePhase}
+          existingDeferredCount={deferredThisWeek.length}
+          existingDeferred={deferredThisWeek}
+          onLetGo={letItGo}
+          onDefer={deferThisWeek}
+          onCarry={carryToNextWeek}
+          onReleaseExisting={(date) => {
+            // Release the existing deferred to make room for a new defer
+            const stored = loadProgress(date);
+            if (stored) {
+              stored.status = "released";
+              saveProgress(date, stored);
+              // Now defer current
+              persist({ ...progress, status: "deferred" });
+            }
+            setDeferModalOpen(false);
+          }}
+          onClose={() => setDeferModalOpen(false)}
+        />
+      )}
+
+      {resurfaceModalOpen && (
+        <ResurfaceModal
+          deferred={deferredThisWeek}
+          onResume={resumeDeferredSession}
+          onClose={() => setResurfaceModalOpen(false)}
         />
       )}
 
@@ -830,6 +1071,168 @@ function CycleModal({ cycleStart, onSave, onClose }) {
   );
 }
 
+function DeferModal({ progressTitle, cyclePhase, existingDeferredCount, existingDeferred, onLetGo, onDefer, onCarry, onReleaseExisting, onClose }) {
+  const isMenstrualEarly = cyclePhase && cyclePhase.phase === "menstrual" && cyclePhase.day <= 2;
+  const isMenstrual = cyclePhase && cyclePhase.phase === "menstrual";
+  const hasExistingDeferred = existingDeferredCount >= 1;
+
+  // Recommended option, given context
+  const recommendedKey = isMenstrualEarly ? "release" : (isMenstrual ? "release" : "defer");
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h2 style={{ fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 500, margin: 0 }}>
+            Couldn't train today
+          </h2>
+          <button onClick={onClose} className="ft-icon-btn"><X size={20} /></button>
+        </div>
+
+        <div style={{ fontSize: 13, color: "#6B5530", marginBottom: 18, lineHeight: 1.5 }}>
+          {isMenstrualEarly && (
+            <>Day {cyclePhase.day} of your period. This isn't laziness — it's biology. The most honest move is often to let it go.</>
+          )}
+          {!isMenstrualEarly && isMenstrual && (
+            <>You're in your menstrual phase. Listen to your body first.</>
+          )}
+          {!isMenstrual && (
+            <>What got in the way matters less than what you do next. Three options.</>
+          )}
+        </div>
+
+        {hasExistingDeferred && (
+          <div style={{ padding: 12, background: "#FCF4E8", border: "1px solid #E8D5A8", borderRadius: 8, marginBottom: 16, fontSize: 12, color: "#6B5530", lineHeight: 1.5 }}>
+            <strong>One deferred session already this week:</strong> {existingDeferred[0].title}.
+            <br />
+            To defer this one, you'd need to let that one go first.
+          </div>
+        )}
+
+        {/* Option A: Let it go */}
+        <DeferOption
+          recommended={recommendedKey === "release"}
+          icon={<MinusCircle size={16} color="#6B5530" />}
+          title="Let it go"
+          subtitle="Release this session entirely. No debt, no carry-over. Tomorrow continues as planned."
+          onClick={onLetGo}
+        />
+
+        {/* Option B: Defer this week */}
+        {!hasExistingDeferred ? (
+          <DeferOption
+            recommended={recommendedKey === "defer"}
+            icon={<PauseCircle size={16} color="#B8860B" />}
+            title="Defer to this week"
+            subtitle="Resurface on a rest day. Settle by Sunday — make it up, carry forward, or release."
+            onClick={onDefer}
+          />
+        ) : (
+          <DeferOption
+            icon={<PauseCircle size={16} color="#B8860B" />}
+            title="Release the other deferred & defer this one"
+            subtitle={`Lets go of "${existingDeferred[0].title}" and defers today's session instead.`}
+            onClick={() => onReleaseExisting(existingDeferred[0].date)}
+          />
+        )}
+
+        {/* Option C: Carry to next week */}
+        <DeferOption
+          icon={<Forward size={16} color="#B8860B" />}
+          title="Carry to next week"
+          subtitle="Adds today's session to next week's plan from the start."
+          onClick={onCarry}
+        />
+
+        <button className="ft-btn ft-btn-ghost" onClick={onClose} style={{ width: "100%", justifyContent: "center", marginTop: 12 }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DeferOption({ recommended, icon, title, subtitle, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: "100%",
+        textAlign: "left",
+        background: recommended ? "#ECE4CF" : "#FCFAF5",
+        border: recommended ? "1.5px solid #6B5530" : "1px solid #E8DFCB",
+        borderRadius: 10,
+        padding: "14px 16px",
+        marginBottom: 8,
+        cursor: "pointer",
+        fontFamily: "inherit",
+        display: "block",
+        transition: "all 0.15s",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        {icon}
+        <div style={{ fontSize: 15, fontWeight: 500, color: "#2A2419" }}>{title}</div>
+        {recommended && (
+          <span style={{ marginLeft: "auto", fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#6B5530", background: "#FCFAF5", padding: "2px 6px", borderRadius: 4 }}>
+            Suggested
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: "#8A7B5E", lineHeight: 1.5, paddingLeft: 24 }}>
+        {subtitle}
+      </div>
+    </button>
+  );
+}
+
+function ResurfaceModal({ deferred, onResume, onClose }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h2 style={{ fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 500, margin: 0 }}>
+            Train deferred session
+          </h2>
+          <button onClick={onClose} className="ft-icon-btn"><X size={20} /></button>
+        </div>
+
+        <div style={{ fontSize: 13, color: "#6B5530", marginBottom: 18, lineHeight: 1.5 }}>
+          Pick which session to bring forward to today. Today's exercises will be replaced with this session.
+        </div>
+
+        {deferred.map((d, i) => (
+          <button
+            key={i}
+            onClick={() => onResume(d)}
+            style={{
+              width: "100%",
+              textAlign: "left",
+              background: "#FCFAF5",
+              border: "1px solid #E8DFCB",
+              borderRadius: 10,
+              padding: "14px 16px",
+              marginBottom: 8,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              display: "block",
+            }}
+          >
+            <div style={{ fontSize: 14, fontWeight: 500, color: "#2A2419", marginBottom: 4 }}>{d.title}</div>
+            <div style={{ fontSize: 11, color: "#8A7B5E" }}>
+              Originally {new Date(d.date).toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })} · {d.exercises.length} exercises
+            </div>
+          </button>
+        ))}
+
+        <button className="ft-btn ft-btn-ghost" onClick={onClose} style={{ width: "100%", justifyContent: "center", marginTop: 12 }}>
+          Keep resting
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AiCoachModal({ currentSession, currentDate, cyclePhase, onApply, onClose, onOpenSettings }) {
   const [step, setStep] = useState("ready");
   const [analysis, setAnalysis] = useState(null);
@@ -849,6 +1252,10 @@ function AiCoachModal({ currentSession, currentDate, cyclePhase, onApply, onClos
       const fromDate = addDays(currentDate, -28);
       const sessions = loadHistoricalSessions(fromDate, addDays(currentDate, -1));
 
+      // Compute training debt context
+      const recentDeferred = sessions.filter(s => s.status === "deferred").map(s => s.title);
+      const recentReleased = sessions.filter(s => s.status === "released").map(s => ({ date: s.date, title: s.title }));
+
       const context = {
         today: {
           date: formatDate(currentDate),
@@ -860,7 +1267,7 @@ function AiCoachModal({ currentSession, currentDate, cyclePhase, onApply, onClos
             prescribed_sets: e.sets, prescribed_reps: e.reps,
           })),
         },
-        history: sessions.map((s) => ({
+        history: sessions.filter(s => s.status !== "released" && s.status !== "deferred" && s.status !== "carried").map((s) => ({
           date: s.date, title: s.title, location: s.location,
           partial: s.partial || false,
           exercises: s.exercises
@@ -875,6 +1282,10 @@ function AiCoachModal({ currentSession, currentDate, cyclePhase, onApply, onClos
             })),
           session_note: s.sessionNote || null,
         })),
+        training_debt: {
+          deferred_sessions_pending: recentDeferred,
+          released_sessions_recent: recentReleased,
+        },
       };
 
       const cycleGuidance = cyclePhase ? `
@@ -889,9 +1300,14 @@ Today she is in: ${PHASE_NAMES[cyclePhase.phase]} (Day ${cyclePhase.day}). Adjus
 
       const prompt = `You are a strength coach for a returning lifter in her early 30s training to lose 4 kg, lose 3 inches off her hips, and build muscle. She trains 4 days/week (Sat & Sun 60 min, Tue & Thu 30–45 min). She has weights in Delhi and only resistance bands when traveling to Bhubaneswar. She is vegetarian.${cycleGuidance}
 
-Today's planned session and her recent training history:
+Today's planned session, her recent training history, and any training debt:
 
 ${JSON.stringify(context, null, 2)}
+
+Important:
+- "history" only includes ACTUALLY COMPLETED sessions. Released and deferred sessions are excluded so you don't think she trained when she didn't.
+- "training_debt.released_sessions_recent" tells you which sessions she released (didn't train, didn't make up). If a muscle group has been recently released, do NOT progressively overload it — she's had less stimulus than the plan implies.
+- "training_debt.deferred_sessions_pending" are sessions she might still make up this week. Don't count them as trained yet.
 
 Analyze her recent progress and suggest progressive overload adjustments to TODAY'S session. For each exercise:
 - KEEP: same prescription
@@ -904,12 +1320,13 @@ Rules:
 - Only ONE progression lever per exercise per week
 - Respect equipment: bands for Bhubaneswar, weights for Delhi
 - If history is sparse (< 2 prior sessions), KEEP and note "build baseline first"
-- If recent sessions were marked partial, lean toward KEEP (recovery may be needed)
+- If recent sessions for this muscle group were RELEASED (not made up), KEEP — she's had less volume than the plan
+- If recent sessions were marked PARTIAL, lean toward KEEP (recovery may be needed)
 - Be conservative — small wins compound
 
 Respond ONLY with valid JSON, no markdown:
 {
-  "summary": "2-3 sentences mentioning cycle phase if relevant and her recent progress",
+  "summary": "2-3 sentences. Mention cycle phase if relevant. Mention if released sessions affected your suggestions.",
   "suggestions": [
     {
       "exercise_id": "id",
