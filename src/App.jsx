@@ -163,6 +163,7 @@ function SundayReflectionCard({ onDismiss }) {
 
   // Compute weekly summary from local data
   const summary = computeWeeklySummary();
+  const deferred = getDeferredSessions();
 
   function submit() {
     saveReflection(weekKey, { note: note.trim(), savedAt: new Date().toISOString() });
@@ -173,6 +174,31 @@ function SundayReflectionCard({ onDismiss }) {
   function skip() {
     saveReflection(weekKey, { skipped: true, savedAt: new Date().toISOString() });
     onDismiss();
+  }
+
+  function carryForward() {
+    // Move all deferred sessions into next week's carry-over queue
+    const queue = JSON.parse(localStorage.getItem("carry_queue") || "[]");
+    deferred.forEach((d) => {
+      queue.push({ ...d, carriedFrom: weekKey });
+    });
+    localStorage.setItem("carry_queue", JSON.stringify(queue));
+    // Mark all deferred as resolved
+    deferred.forEach((d) => {
+      const stored = JSON.parse(localStorage.getItem(`workout:${d.date}`) || "{}");
+      stored.status = "carried";
+      localStorage.setItem(`workout:${d.date}`, JSON.stringify(stored));
+    });
+    skip();
+  }
+
+  function releaseAll() {
+    deferred.forEach((d) => {
+      const stored = JSON.parse(localStorage.getItem(`workout:${d.date}`) || "{}");
+      stored.status = "released";
+      localStorage.setItem(`workout:${d.date}`, JSON.stringify(stored));
+    });
+    skip();
   }
 
   return (
@@ -187,6 +213,24 @@ function SundayReflectionCard({ onDismiss }) {
         <div style={{ fontFamily: "Fraunces, serif", fontStyle: "italic", fontSize: 16, color: "#2A2419", lineHeight: 1.5, marginBottom: 12 }}>
           {summary}
         </div>
+
+        {deferred.length > 0 && !submitted && (
+          <div style={{ marginBottom: 16, padding: 12, background: "#FCFAF5", border: "1px solid #C8B894", borderRadius: 8 }}>
+            <div style={{ fontSize: 12, color: "#6B5530", marginBottom: 8, lineHeight: 1.5 }}>
+              {deferred.length === 1 ? "One session" : `${deferred.length} sessions`} deferred and not made up: {" "}
+              <strong>{deferred.map(d => d.title).join(", ")}</strong>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              <button className="ft-btn" style={{ padding: "6px 12px", fontSize: 12 }} onClick={carryForward}>
+                Carry to next week
+              </button>
+              <button className="ft-btn ft-btn-ghost" style={{ padding: "6px 12px", fontSize: 12 }} onClick={releaseAll}>
+                Let it go
+              </button>
+            </div>
+          </div>
+        )}
+
         {!submitted ? (
           <>
             <div style={{ fontSize: 12, color: "#6B5530", marginBottom: 8 }}>
@@ -218,6 +262,28 @@ function SundayReflectionCard({ onDismiss }) {
       </div>
     </div>
   );
+}
+
+// Find deferred sessions in the current week that haven't been made up
+function getDeferredSessions() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const deferred = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() - i);
+    const key = d.toISOString().split("T")[0];
+    try {
+      const raw = localStorage.getItem(`workout:${key}`);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (data.status === "deferred") {
+          deferred.push({ date: key, title: data.title, location: data.location, exercises: data.exercises });
+        }
+      }
+    } catch {}
+  }
+  return deferred;
 }
 
 function computeWeeklySummary() {
