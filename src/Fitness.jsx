@@ -461,8 +461,9 @@ export default function FitnessModule({ onOpenSettings }) {
   const deferredThisWeek = getDeferredThisWeek(weekStart);
   const carryQueueLen = getCarryQueue().length;
 
-  // Show "couldn't train today" button only on workout days that aren't done/deferred/released
-  const showCouldntTrainButton = !progress.isRest && doneEx === 0 && !progress.status && !progress.partial && isToday;
+  // Show "couldn't train today" button on any workout day (today or past) that has nothing logged yet
+  const isFuture = selectedDate > today;
+  const showCouldntTrainButton = !progress.isRest && doneEx === 0 && !progress.status && !progress.partial && !isFuture;
 
   // On rest days (or any day), if there's a deferred session this week, show resume prompt
   const showResumePrompt = progress.isRest && deferredThisWeek.length > 0 && isToday;
@@ -708,14 +709,14 @@ export default function FitnessModule({ onOpenSettings }) {
             </div>
           )}
 
-          {/* "Couldn't train today" entry point */}
+          {/* "Couldn't train" entry point */}
           {showCouldntTrainButton && (
             <div style={{ marginTop: 16, padding: 14, background: "transparent", border: "1px dashed #C8B894", borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
               <div style={{ flex: 1, minWidth: 180, fontSize: 12, color: "#8A7B5E" }}>
-                Body or schedule got in the way?
+                {isToday ? "Body or schedule got in the way?" : "Didn't train this day?"}
               </div>
               <button className="ft-btn ft-btn-ghost" onClick={() => setDeferModalOpen(true)} style={{ fontSize: 12 }}>
-                Couldn't train today
+                {isToday ? "Couldn't train today" : "Mark this day"}
               </button>
             </div>
           )}
@@ -777,6 +778,7 @@ export default function FitnessModule({ onOpenSettings }) {
         <DeferModal
           progressTitle={progress.title}
           cyclePhase={cyclePhase}
+          isToday={isToday}
           existingDeferredCount={deferredThisWeek.length}
           existingDeferred={deferredThisWeek}
           onLetGo={letItGo}
@@ -1071,7 +1073,7 @@ function CycleModal({ cycleStart, onSave, onClose }) {
   );
 }
 
-function DeferModal({ progressTitle, cyclePhase, existingDeferredCount, existingDeferred, onLetGo, onDefer, onCarry, onReleaseExisting, onClose }) {
+function DeferModal({ progressTitle, cyclePhase, isToday, existingDeferredCount, existingDeferred, onLetGo, onDefer, onCarry, onReleaseExisting, onClose }) {
   const isMenstrualEarly = cyclePhase && cyclePhase.phase === "menstrual" && cyclePhase.day <= 2;
   const isMenstrual = cyclePhase && cyclePhase.phase === "menstrual";
   const hasExistingDeferred = existingDeferredCount >= 1;
@@ -1084,7 +1086,7 @@ function DeferModal({ progressTitle, cyclePhase, existingDeferredCount, existing
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
           <h2 style={{ fontFamily: "Fraunces, serif", fontSize: 22, fontWeight: 500, margin: 0 }}>
-            Couldn't train today
+            {isToday ? "Couldn't train today" : "Mark this day"}
           </h2>
           <button onClick={onClose} className="ft-icon-btn"><X size={20} /></button>
         </div>
@@ -1096,8 +1098,11 @@ function DeferModal({ progressTitle, cyclePhase, existingDeferredCount, existing
           {!isMenstrualEarly && isMenstrual && (
             <>You're in your menstrual phase. Listen to your body first.</>
           )}
-          {!isMenstrual && (
+          {!isMenstrual && isToday && (
             <>What got in the way matters less than what you do next. Three options.</>
+          )}
+          {!isMenstrual && !isToday && (
+            <>Recording what actually happened keeps the plan honest. Three options.</>
           )}
         </div>
 
