@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from "react";
-import { Settings, Download, X, Dumbbell, Sprout } from "lucide-react";
+import { Settings, Download, X, Dumbbell, Sprout, Heart } from "lucide-react";
 import FitnessModule from "./Fitness.jsx";
 import HabitsModule from "./Habits.jsx";
+import WellnessModule from "./Wellness.jsx";
 
 function loadApiKey() { return localStorage.getItem("anthropic_api_key") || ""; }
 function saveApiKey(key) {
@@ -126,7 +127,7 @@ export default function App() {
               The Quiet Routine
             </div>
             <div style={{ fontSize: 11, color: "#8A7B5E", marginTop: 2, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-              {activeModule === "fitness" ? "Strength · Glute · Hip" : "Daily practices"}
+              {activeModule === "fitness" ? "Strength · Glute · Hip" : activeModule === "habits" ? "Daily practices" : "Skin · Cycle · Patterns"}
             </div>
           </div>
           <button className="ft-btn ft-btn-ghost" onClick={() => setSettingsOpen(true)} style={{ padding: "8px 12px" }}>
@@ -141,6 +142,9 @@ export default function App() {
           <button className={`module-tab ${activeModule === "habits" ? "active" : ""}`} onClick={() => switchModule("habits")}>
             <Sprout size={14} /> Habits
           </button>
+          <button className={`module-tab ${activeModule === "wellness" ? "active" : ""}`} onClick={() => switchModule("wellness")}>
+  <Heart size={14} /> Wellness
+</button>
         </div>
       </div>
 
@@ -150,6 +154,7 @@ export default function App() {
 
       {activeModule === "fitness" && <FitnessModule onOpenSettings={() => setSettingsOpen(true)} />}
       {activeModule === "habits" && <HabitsModule />}
+      {activeModule === "wellness" && <WellnessModule />}
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
